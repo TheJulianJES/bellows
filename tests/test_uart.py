@@ -7,6 +7,7 @@ import zigpy.config as conf
 import zigpy.serial
 
 from bellows import uart
+from bellows.thread import EventLoopThread
 import bellows.types as t
 
 
@@ -109,6 +110,56 @@ async def test_connect_threaded_failure(monkeypatch):
     [t.join(1) for t in threading.enumerate() if "bellows" in t.name]
     threads = [t for t in threading.enumerate() if "bellows" in t.name]
     assert len(threads) == 0
+
+
+async def test_connect_threaded_cancelled(monkeypatch):
+    """Cancelling a threaded connect stops the UART thread."""
+    threads = []
+
+    class RecordingEventLoopThread(EventLoopThread):
+        def __init__(self):
+            super().__init__()
+            threads.append(self)
+
+    main_loop = asyncio.get_running_loop()
+    connecting = main_loop.create_future()
+
+    async def mockconnect(loop, protocol_factory, **kwargs):
+        main_loop.call_soon_threadsafe(connecting.set_result, None)
+        await asyncio.sleep(10)
+
+    monkeypatch.setattr(uart, "EventLoopThread", RecordingEventLoopThread)
+    monkeypatch.setattr(zigpy.serial, "create_serial_connection", mockconnect)
+
+    connect_task = asyncio.create_task(
+        uart.connect(
+            conf.SCHEMA_DEVICE(
+                {
+                    conf.CONF_DEVICE_PATH: "/dev/serial",
+                    conf.CONF_DEVICE_BAUDRATE: 115200,
+                }
+            ),
+            MagicMock(),
+        )
+    )
+
+    # Cancel while the thread loop is connecting, not while it is starting
+    async with asyncio.timeout(1):
+        await connecting
+
+    connect_task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await connect_task
+
+    (thread,) = threads
+
+    try:
+        async with asyncio.timeout(1):
+            await thread.thread_complete
+    finally:
+        # Don't leave a running loop behind for later tests if this regresses
+        thread.force_stop()
 
 
 async def test_connect_threaded_failure_cancellation_propagation(monkeypatch):

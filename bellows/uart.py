@@ -168,7 +168,8 @@ async def connect(config, api, use_thread=True):
             protocol, connection_done = await thread.run_coroutine_threadsafe(
                 _connect(config, api)
             )
-        except Exception:
+        except BaseException:
+            # Also on cancellation; otherwise nothing stops the thread's loop
             thread.force_stop()
             raise
         connection_done.add_done_callback(lambda _: thread.force_stop())
