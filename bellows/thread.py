@@ -32,9 +32,11 @@ class EventLoopThread:
             # this thread no longer writes `self.loop` after a concurrent `start()` may have
             # replaced it.
             loop, self.loop = self.loop, None
-            # `close()` only signals the default executor's threads to exit
-            loop.run_until_complete(loop.shutdown_default_executor())
-            loop.close()
+            try:
+                # `close()` only signals the default executor's threads to exit
+                loop.run_until_complete(loop.shutdown_default_executor())
+            finally:
+                loop.close()
 
     async def start(self):
         current_loop = asyncio.get_event_loop()
@@ -61,14 +63,16 @@ class EventLoopThread:
 
     async def stop(self):
         """Stop the loop and wait until its thread has exited."""
+        # A concurrent `start()` may replace these while we wait
+        thread_complete, executor = self.thread_complete, self._executor
         self.force_stop()
 
-        if self.thread_complete is not None:
-            await self.thread_complete
+        if thread_complete is not None:
+            await asyncio.shield(thread_complete)
 
-        if self._executor is not None:
-            # The worker only has to exit once `thread_complete` is done
-            self._executor.shutdown(wait=True)
+        if executor is not None:
+            # `_thread_main` has returned, the worker only has to exit
+            executor.shutdown(wait=True)
 
     def force_stop(self):
         loop = self.loop

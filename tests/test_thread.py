@@ -127,6 +127,7 @@ async def test_thread_waits_for_default_executor(thread):
 
 async def test_thread_stop(thread):
     """`stop()` returns only once every thread it started has exited."""
+    threads_before = set(threading.enumerate())
 
     async def start_executor_job():
         await asyncio.get_running_loop().run_in_executor(None, time.sleep, 0)
@@ -137,8 +138,11 @@ async def test_thread_stop(thread):
         await thread.stop()
 
     assert thread.loop is None
+    # The fixture's thread is in `threads_before`, so check it explicitly
     assert [
-        t for t in threading.enumerate() if "bellows" in t.name or "asyncio" in t.name
+        t
+        for t in threading.enumerate()
+        if "bellows" in t.name or (t not in threads_before and "asyncio" in t.name)
     ] == []
 
 
