@@ -1,5 +1,6 @@
 import asyncio
 import threading
+import time
 from unittest.mock import AsyncMock, MagicMock, call, patch, sentinel
 
 import pytest
@@ -85,8 +86,10 @@ async def test_connect_threaded_failure(monkeypatch):
     appmock = MagicMock()
     transport = MagicMock()
 
-    mockconnect = AsyncMock()
-    mockconnect.side_effect = OSError
+    async def mockconnect(loop, protocol_factory, **kwargs):
+        # Like serialx, which opens the port in the thread loop's default executor
+        await asyncio.get_running_loop().run_in_executor(None, time.sleep, 0)
+        raise OSError
 
     monkeypatch.setattr(zigpy.serial, "create_serial_connection", mockconnect)
 
@@ -105,10 +108,11 @@ async def test_connect_threaded_failure(monkeypatch):
             appmock,
         )
 
-    # Ensure all threads are cleaned up
-    [t.join(1) for t in threading.enumerate() if "bellows" in t.name]
-    threads = [t for t in threading.enumerate() if "bellows" in t.name]
-    assert len(threads) == 0
+    # All threads have exited by the time `connect` raises
+    threads = [
+        t for t in threading.enumerate() if "bellows" in t.name or "asyncio" in t.name
+    ]
+    assert threads == []
 
 
 async def test_connect_threaded_failure_cancellation_propagation(monkeypatch):

@@ -169,7 +169,7 @@ async def connect(config, api, use_thread=True):
                 _connect(config, api)
             )
         except Exception:
-            thread.force_stop()
+            await thread.stop()
             raise
         connection_done.add_done_callback(lambda _: thread.force_stop())
     else:
