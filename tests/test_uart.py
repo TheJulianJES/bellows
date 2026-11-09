@@ -83,6 +83,7 @@ async def test_connect_threaded(monkeypatch):
 
 
 async def test_connect_threaded_failure(monkeypatch):
+    threads_before = set(threading.enumerate())
     appmock = MagicMock()
     transport = MagicMock()
 
@@ -109,6 +110,34 @@ async def test_connect_threaded_failure(monkeypatch):
         )
 
     # All threads have exited by the time `connect` raises
+    assert set(threading.enumerate()) - threads_before == set()
+
+
+async def test_connect_threaded_failure_stuck_executor_job(monkeypatch):
+    """A stuck executor job does not delay the failure past `THREAD_STOP_TIMEOUT`."""
+    monkeypatch.setattr(uart, "THREAD_STOP_TIMEOUT", 0.05)
+    job_done = threading.Event()
+
+    async def mockconnect(loop, protocol_factory, **kwargs):
+        asyncio.get_running_loop().run_in_executor(None, job_done.wait, 1)
+        raise RuntimeError
+
+    monkeypatch.setattr(zigpy.serial, "create_serial_connection", mockconnect)
+
+    with pytest.raises(RuntimeError):
+        async with asyncio.timeout(0.5):
+            await uart.connect(
+                conf.SCHEMA_DEVICE(
+                    {
+                        conf.CONF_DEVICE_PATH: "/dev/serial",
+                        conf.CONF_DEVICE_BAUDRATE: 115200,
+                    }
+                ),
+                MagicMock(),
+            )
+
+    job_done.set()
+    [t.join(1) for t in threading.enumerate() if "bellows" in t.name]
     threads = [
         t for t in threading.enumerate() if "bellows" in t.name or "asyncio" in t.name
     ]

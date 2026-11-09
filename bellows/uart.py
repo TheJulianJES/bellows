@@ -12,6 +12,8 @@ import bellows.types as t
 
 LOGGER = logging.getLogger(__name__)
 RESET_TIMEOUT = 2.5
+# A blocking executor job (e.g. a DNS lookup) can outlive a failed connect
+THREAD_STOP_TIMEOUT = 1.0
 
 # An ESPHome port in this mode engages its tap, which ACKs frames on our behalf. The
 # mode does not name a protocol: which one the tap speaks is the device's configuration.
@@ -169,7 +171,11 @@ async def connect(config, api, use_thread=True):
                 _connect(config, api)
             )
         except Exception:
-            await thread.stop()
+            try:
+                async with asyncio_timeout(THREAD_STOP_TIMEOUT):
+                    await thread.stop()
+            except TimeoutError:
+                LOGGER.debug("UART thread did not stop within %ss", THREAD_STOP_TIMEOUT)
             raise
         connection_done.add_done_callback(lambda _: thread.force_stop())
     else:
