@@ -1,6 +1,7 @@
 import asyncio
 from asyncio import timeout as asyncio_timeout
 import threading
+import time
 from unittest import mock
 
 import pytest
@@ -20,12 +21,14 @@ async def test_thread_start(monkeypatch):
         return future.result(1)
 
     loopmock.run_until_complete.side_effect = mockrun
+    loopmock.shutdown_default_executor = mock.AsyncMock()
     thread = EventLoopThread()
     thread_complete = await thread.start()
     await thread_complete
 
-    assert loopmock.run_until_complete.call_count == 1
+    assert loopmock.run_until_complete.call_count == 2
     assert loopmock.run_forever.call_count == 1
+    assert loopmock.shutdown_default_executor.await_count == 1
     assert loopmock.close.call_count == 1
 
 
@@ -101,6 +104,46 @@ async def test_thread_loop(thread):
     future = asyncio.run_coroutine_threadsafe(test_coroutine(), loop=thread.loop)
     result = await asyncio.wrap_future(future, loop=asyncio.get_event_loop())
     assert result is mock.sentinel.result
+
+
+async def test_thread_waits_for_default_executor(thread):
+    """The loop's default executor threads are joined before the thread completes."""
+    threads_before = set(threading.enumerate())
+
+    async def start_blocking_job():
+        asyncio.get_running_loop().run_in_executor(None, time.sleep, 0.1)
+
+    await thread.run_coroutine_threadsafe(start_blocking_job())
+    thread.force_stop()
+
+    async with asyncio_timeout(1):
+        await thread.thread_complete
+
+    executor_threads = [
+        t for t in set(threading.enumerate()) - threads_before if "asyncio" in t.name
+    ]
+    assert executor_threads == []
+
+
+async def test_thread_stop(thread):
+    """`stop()` returns only once every thread it started has exited."""
+
+    async def start_executor_job():
+        await asyncio.get_running_loop().run_in_executor(None, time.sleep, 0)
+
+    await thread.run_coroutine_threadsafe(start_executor_job())
+
+    async with asyncio_timeout(1):
+        await thread.stop()
+
+    assert thread.loop is None
+    assert [
+        t for t in threading.enumerate() if "bellows" in t.name or "asyncio" in t.name
+    ] == []
+
+
+async def test_thread_stop_not_started():
+    await EventLoopThread().stop()
 
 
 async def test_thread_double_start(thread):
